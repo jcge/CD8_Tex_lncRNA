@@ -1,0 +1,94 @@
+rm(list=ls())
+options(stringsAsFactors = F) 
+library(clusterProfiler)
+library(enrichplot)
+library(tidyverse)
+library(ggstatsplot)
+library(ggnewscale)
+# library(org.Hs.eg.db)
+library(org.Mm.eg.db)
+library(DOSE)
+library(pathview)  #BiocManager::install("pathview",ask = F,update = F)
+
+##数据载入和目录设置
+setwd("C:/Users/Lenovo/Desktop/test")
+load(file = '1.counts.Rdata')
+load(list.files(path = "./3.DEG",pattern = 'DEG_results.Rdata',full.names = T))
+dir.create("4.Enrichment_KEGG_GO")
+setwd("4.Enrichment_KEGG_GO")
+
+#####  筛选条件设置 #######
+#log2FC_cutoff = log2(10)
+#pvalue_cutoff = 0.001
+#padj_cutoff = 0.001
+
+####获取DEG结果的上下调基因 ####
+#DEG_DESeq2[,c(2,5,6)]  DEG_limma_voom[,c(1,4,5)] DEG_edgeR[,c(1,4,5)] 
+#need_DEG <- DEG_DESeq2[,c(2,5,6)]  
+#head(need_DEG)
+#colnames(need_DEG) <- c('log2FoldChange','pvalue','padj')
+
+gene_up=rownames(need_DEG[with(need_DEG,log2FoldChange > log2FC_cutoff & pvalue<pvalue_cutoff & padj<padj_cutoff),])
+gene_down=rownames(need_DEG[with(need_DEG,log2FoldChange < -log2FC_cutoff & pvalue<pvalue_cutoff & padj<padj_cutoff),])
+
+#### 转化基因名为entrez ID ####
+#org.Hs.eg.db\org.Mm.eg.db包含着各大主流数据库的数据，如entrez ID和ensembl,
+#keytypes(org.Hs.eg.db) #查看所有支持及可转化类型 常用 "ENTREZID","ENSEMBL","SYMBOL"
+gene_up_entrez <- as.character(na.omit(bitr(gene_up, #数据集
+                                            fromType="SYMBOL", #输入格式
+                                            toType="ENTREZID", # 转为ENTERZID格式
+                                            OrgDb="org.Mm.eg.db")[,2])) #"org.Hs.eg.db" "org.Mm.eg.db"
+gene_down_entrez <- as.character(na.omit(bitr(gene_down, #数据集
+                                              fromType="SYMBOL", #输入格式
+                                              toType="ENTREZID", # 转为ENTERZID格式
+                                              OrgDb="org.Mm.eg.db")[,2])) #"org.Hs.eg.db" "org.Mm.eg.db"
+gene_diff_entrez <- unique(c(gene_up_entrez ,gene_down_entrez ))
+## 或者使用mapIds
+# gene_up_ENTREZID <- as.character(na.omit(mapIds(x = org.Mm.eg.db,
+#                                                  keys =  gene_up,
+#                                                  keytype = "SYMBOL",
+#                                                  column = "ENTREZID")))
+
+#### KEGG、GO富集 ####
+kegg_enrich_results <- enrichKEGG(gene  = gene_up_entrez,
+                                  organism  = "mmu", #物种人类 hsa 小鼠mmu
+                                  pvalueCutoff = 0.05,
+                                  qvalueCutoff = 0.2)
+kk_read <- DOSE::setReadable(kegg_enrich_results, 
+                                         OrgDb="org.Mm.eg.db", 
+                                         keyType='ENTREZID')#ENTREZID to gene Symbol
+write.csv(kk_read@result,'KEGG_gene_up_enrichresults.csv') 
+save(kegg_enrich_results, file ='KEGG_gene_up_enrichresults.Rdata')
+
+go_enrich_results <- enrichGO(gene = gene_up_entrez,
+                              OrgDb = "org.Mm.eg.db",
+                              ont   = "ALL"  ,     #One of "BP", "MF"  "CC"  "ALL" 
+                              pvalueCutoff  = 0.05,
+                              qvalueCutoff  = 0.2,
+                              readable      = TRUE)
+write.csv(go_enrich_results@result, 'GO_gene_up_BP_enrichresults.csv') 
+save(go_enrich_results, file ='GO_gene_up_enrichresults.Rdata')
+
+### barplot
+barp <- barplot(go_enrich_results, font.size=14, showCategory=10)+
+    theme(plot.margin=unit(c(1,1,1,1),'lines'))  
+#如果enrichGO的ont为'ALL'
+if (F) {
+  barp <- barplot(go_enrich_results, split= "ONTOLOGY", font.size =14)+
+      facet_grid(ONTOLOGY~., scale="free")+     
+      theme(plot.margin=unit(c(1,1,1,1),'lines')) #调整图形四周留白大小
+  }
+ggsave(barp,filename = paste0(fn,'.pdf'), width=10, height=10)
+
+### dotplot 
+dotp <- enrichplot::dotplot(go_enrich_results,font.size =14)+
+  theme(legend.key.size = unit(10, "pt"),#调整图例大小
+        plot.margin=unit(c(1,1,1,1),'lines'))#调整四周留白大小
+#如果enrichGO的ont为'ALL'
+if (F) {
+    dotp <- enrichplot::dotplot(go_enrich_results,font.size =8,split = 'ONTOLOGY')+
+      facet_grid(ONTOLOGY~., scale="free")+     
+      theme(legend.key.size = unit(10, "pt"),#调整图例大小
+            plot.margin=unit(c(1,1,1,1),'lines'))#调整四周留白大小
+  }
+ggsave(dotp,filename = paste0(fn,'.pdf'),width =10,height =10)

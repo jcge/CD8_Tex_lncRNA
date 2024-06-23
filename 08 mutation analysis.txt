@@ -1,0 +1,363 @@
+getwd()
+setwd("C:\\Users\\log\\Desktop\\肝癌生信\\09突变分析")
+#载入R包和数TCGA-LIHC的maf数据
+library(maftools)
+library(tidyverse)
+
+library(TCGAbiolinks)
+library(tidyverse)
+tmp <- load("TCGA-LIHC_SNP.Rdata")
+
+
+query <- GDCquery(
+  project = "TCGA-LIHC", 
+  data.category = "Simple Nucleotide Variation",
+  data.type = "Masked Somatic Mutation",
+  access = "open"
+)
+
+GDCdownload(query)
+
+GDCprepare(query, save = T,save.filename = "TCGALIHC_SNP.Rdata")
+
+
+write.table(data,"data.txt",sep = "\t",na = "",row.names = F)
+write.csv(data,"data.csv",sep = "\t",na = "")
+
+query_SNV <- GDCquery(project = "TCGA-LIHC",
+                      data.category = "Simple Nucleotide Variation",
+                      data.type = "Masked Somatic Mutation",
+                      workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking")
+GDCdownload(query_SNV)
+mafFilePath2 = dir(path = "GDCdata/",pattern = "masked.maf.gz$",full.names = T,recursive=T)
+mafdata2 <- lapply(mafFilePath2, function(x){read.maf(x,isTCGA=TRUE)})
+snv_data2 = merge_mafs(mafdata2)
+
+tmp = read.table("TCGA-LIHC.mutect2_snv.tsv.gz",sep = "\t" , header = T,
+                 stringsAsFactors = FALSE ,
+                 check.names = FALSE)
+colnames(tmp) =c("Tumor_Sample_Barcode", "Hugo_Symbol", 
+                 "Chromosome", "Start_Position", 
+                 "End_Position", "Reference_Allele", "Tumor_Seq_Allele2", 
+                 "HGVSp_Short" , 'effect' ,"Consequence",
+                 "vaf" )
+##将原矩阵的  列名  更换  为上述。
+tmp$Entrez_Gene_Id =1
+tmp$Center ='ucsc'
+tmp$NCBI_Build ='GRCh38'
+tmp$NCBI_Build ='GRCh38'
+tmp$Strand ='+'
+tmp$Variant_Classification = tmp$effect
+##在数据结构中添加上述部分
+tail(sort(table(tmp$Variant_Classification )))
+##table()为 总结 表格中  各变量出现次数。
+##sort为升序或降序排列变量
+##tail  返回向量矩阵的最后部分
+
+tmp$Tumor_Seq_Allele1 = tmp$Reference_Allele
+tmp$Variant_Type = ifelse(
+  tmp$Reference_Allele %in% c('A','C','T','G') & tmp$Tumor_Seq_Allele2 %in% c('A','C','T','G'),
+  'SNP','INDEL'
+)
+##ifelse(cond,statment1,statment2) 如果cond成立，执行statment1，否则执行statment2，可以对数据做递归循环。
+##{
+####%in%相当于match()函数的一个缩写。用来判断一个数组或矩阵是否包含在另一个数组或矩阵里。举个例子一目了然：
+####首先复制两个变量a和b
+####  a <- 1:5
+####  b <- 3:7
+####  a %in% b    #看a的元素是否包含在b中     输出结果如下：
+####  [1] FALSE FALSE  TRUE  TRUE  TRUE
+##}
+table(tmp$Variant_Type )
+maf= read.maf(maf = tmp,
+              vc_nonSyn=names(tail(sort(table(tmp$Variant_Classification )))))
+##read.maf读取以制表符作为分隔的maf文件
+oncoplot(maf=maf,top=10,fontSize=1,showTumorSampleBarcodes=F) 
+
+##瀑布图(Oncoplots)：
+oncoplot(maf = maf,
+         #draw_titv = FALSE,
+         #anno_height = 1,#样本注释区高度
+         #legend_height = 4, #图例绘图区高度
+         #drawRowBar = T, #是否显示右侧条形图
+         #drawColBar = T, #是否显示顶部条形图
+         top = 10) #高频突变的Top10基因
+
+#更改配色：
+vc_cols <- RColorBrewer::brewer.pal(n = 8, name = 'Paired')
+names(vc_cols) <- c(
+  'In_Frame_Ins',
+  'Translation_Start_Site',
+  'Nonstop_Mutation',
+  'Frame_Shift_Ins',
+  'Frame_Shift_Del',
+  'Splice_Site',
+  'In_Frame_Del',
+  'Missense_Mutation'
+)
+oncoplot(maf = maf, colors = vc_cols, top = 10)
+
+##maf文件摘要图：
+plotmafSummary(maf = maf,
+               rmOutlier = TRUE,
+               addStat = "median",
+               dashboard = TRUE,
+               titvRaw = FALSE)
+
+#Variant Classification：条形图展示不同突变分类数量；
+#Variant Type：条形图展示不同变异类型数量；
+#SNV Class：条形图展示不同SNV及数量；
+#Variants per sample：堆叠柱形图展示每个样本中的突变数量和分类（中位线显示队列间的中位数变异数量）；
+#Variant Classification summary：箱线图展示不同突变在不同样本里的突变数量；
+#Top 10 mutated genes：堆叠条形图展示突变频率Top10的基因。
+
+#当然也可以自定义基因进行展示，
+oncoplot(maf = maf, genes=c("Hras","Kras","Nras"))
+##置换（transition/Ti）、颠换（transversion/Tv）统计：tivi函数对SNP的transition和transversion进行分类，plotTiTv函数绘图。
+titv <- titv(maf = maf,
+             plot = F,
+             useSyn = TRUE)
+plotTiTv(res = titv)
+##显示蛋白结构域以及氨基酸突变的位点和类型（以PTEN为例）：
+lollipopPlot(maf = maf,
+             gene = "PTEN",
+             AACol="HGVSp_Short",
+             showMutationRate = TRUE)
+#肿瘤突变负荷（TMB）比较（内置33个TCGA的cohorts）:
+tcgaCompare(maf=maf,
+            cohortName="LIHC_2")
+#变异等位基因频率（ariant Allele Frequency，VAF）展示：
+plotVaf(maf = maf,
+        top = 10)
+
+laml = read.maf(maf = data,
+                vc_nonSyn=names(tail(sort(table(data$Variant_Classification )))))
+##read.maf读取以制表符作为分隔的maf文件
+#1,绘制MAF文件的整体结果图
+plotmafSummary(maf = laml, rmOutlier = TRUE, addStat = 'median', dashboard = TRUE, titvRaw = FALSE)
+#oncoplot for top 20 genes.
+oncoplot(maf = laml, top = 20)
+#使用 oncostrip 函数展示特定基因在样本中的突变情况
+oncostrip(maf = laml, genes = c('TP53','CTNNB1', 'ARID1A'))
+#titv函数将SNP分类为Transitions_vs_Transversions，
+#并以各种方式返回汇总表的列表。汇总数据也可以显示为一个箱线图，
+#显示六种不同转换的总体分布，并作为堆积条形图显示每个样本中的转换比例
+laml.titv = titv(maf = laml, plot = FALSE, useSyn = TRUE)
+#plot titv summary
+plotTiTv(res = laml.titv)
+#rainfall plots，展示超突变的基因组区域。
+#detectChangePoints设置为TRUE，rainfall plots可以突出显示潜在变化的区域
+rainfallPlot(maf = laml, detectChangePoints = TRUE, pointSize = 0.6)
+#通过tcgaComapre函数实现laml（自有群体）与TCGA中已有的33个癌种队列的突变负载
+#情况的比较。
+#cohortName 给输入的队列命名
+laml.mutload = tcgaCompare(maf = laml, cohortName = 'LIHC-2')
+#somaticInteractions函数使用配对Fisher 's精确检验来分析突变基因之间
+#的的co-occurring 或者exclusiveness
+#exclusive/co-occurance event analysis on top 10 mutated genes.
+Interact <- somaticInteractions(maf = laml, top = 20, pvalue = c(0.05, 0.1))
+#提取P值结果
+Interact$gene_sets
+#mafComapre参数比较两个不同队列的差异突变基因，检验方式为fisher检验。
+
+#输入另一个 MAF 文件
+Our_maf <- read.csv("Our_maf.csv",header=TRUE)
+our_maf = read.maf(maf = Our_maf)
+
+#比较最少Mut个数为5的基因
+pt.vs.rt <- mafCompare(m1 = laml, m2 = our_maf, m1Name = 'LIHC', m2Name = 'OUR', minMut = 5)
+print(pt.vs.rt)
+#比较结果绘制森林图
+forestPlot(mafCompareRes = pt.vs.rt, pVal = 0.01, 
+           color = c('royalblue', 'maroon'), geneFontSize = 0.8)
+#OncogenicPathways 功能查看显著富集通路
+OncogenicPathways(maf = laml)
+#可以对上面富集的通路中选择感兴趣的进行完成的突变展示：
+PlotOncogenicPathways(maf = laml, pathways = "PI3K")
+
+high = read.csv("high.csv",sep = "," , header = T,
+                stringsAsFactors = FALSE ,
+                check.names = FALSE)
+colnames(high) =c("Tumor_Sample_Barcode", "Hugo_Symbol", 
+                  "Chromosome", "Start_Position", 
+                  "End_Position", "Reference_Allele", "Tumor_Seq_Allele2", 
+                  "HGVSp_Short" , 'effect' ,"Consequence",
+                  "vaf" )
+##将原矩阵的  列名  更换  为上述。
+high$Entrez_Gene_Id =1
+high$Center ='ucsc'
+high$NCBI_Build ='GRCh38'
+high$NCBI_Build ='GRCh38'
+high$Strand ='+'
+high$Variant_Classification = high$effect
+##在数据结构中添加上述部分
+tail(sort(table(high$Variant_Classification )))
+##table()为 总结 表格中  各变量出现次数。
+##sort为升序或降序排列变量
+##tail  返回向量矩阵的最后部分
+
+high$Tumor_Seq_Allele1 = high$Reference_Allele
+high$Variant_Type = ifelse(
+  high$Reference_Allele %in% c('A','C','T','G') & high$Tumor_Seq_Allele2 %in% c('A','C','T','G'),
+  'SNP','INDEL'
+)
+##ifelse(cond,statment1,statment2) 如果cond成立，执行statment1，否则执行statment2，可以对数据做递归循环。
+##{
+####%in%相当于match()函数的一个缩写。用来判断一个数组或矩阵是否包含在另一个数组或矩阵里。举个例子一目了然：
+####首先复制两个变量a和b
+####  a <- 1:5
+####  b <- 3:7
+####  a %in% b    #看a的元素是否包含在b中     输出结果如下：
+####  [1] FALSE FALSE  TRUE  TRUE  TRUE
+##}
+table(high$Variant_Type )
+high = read.maf(maf = high,
+                vc_nonSyn=names(tail(sort(table(high$Variant_Classification )))))
+##read.maf读取以制表符作为分隔的maf文件
+oncoplot(maf=high,top=20,fontSize=1,showTumorSampleBarcodes=F) 
+
+##瀑布图(Oncoplots)：
+oncoplot(maf = high,
+         #draw_titv = FALSE,
+         #anno_height = 1,#样本注释区高度
+         #legend_height = 4, #图例绘图区高度
+         #drawRowBar = T, #是否显示右侧条形图
+         #drawColBar = T, #是否显示顶部条形图
+         top = 10) #高频突变的Top10基因
+
+#更改配色：
+vc_cols <- RColorBrewer::brewer.pal(n = 8, name = 'Paired')
+names(vc_cols) <- c(
+  'In_Frame_Ins',
+  'Translation_Start_Site',
+  'Nonstop_Mutation',
+  'Frame_Shift_Ins',
+  'Frame_Shift_Del',
+  'Splice_Site',
+  'In_Frame_Del',
+  'Missense_Mutation'
+)
+oncoplot(maf = maf, colors = vc_cols, top = 5)
+
+high <- read.csv("high.csv",sep = ",",header = T)
+high = read.maf(maf = high,
+                vc_nonSyn=names(tail(sort(table(high$Variant_Classification )))))
+##read.maf读取以制表符作为分隔的maf文件
+oncoplot(maf=high,top=10,fontSize=1,showTumorSampleBarcodes=F) 
+
+##瀑布图(Oncoplots)：
+oncoplot(maf = maf,
+         #draw_titv = FALSE,
+         #anno_height = 1,#样本注释区高度
+         #legend_height = 4, #图例绘图区高度
+         #drawRowBar = T, #是否显示右侧条形图
+         #drawColBar = T, #是否显示顶部条形图
+         top = 10) #高频突变的Top10基因
+
+#更改配色：
+vc_cols <- RColorBrewer::brewer.pal(n = 8, name = 'Paired')
+names(vc_cols) <- c(
+  'In_Frame_Ins',
+  'Translation_Start_Site',
+  'Nonstop_Mutation',
+  'Frame_Shift_Ins',
+  'Frame_Shift_Del',
+  'Splice_Site',
+  'In_Frame_Del',
+  'Missense_Mutation'
+)
+oncoplot(maf = maf, colors = vc_cols, top = 10)
+
+##maf文件摘要图：
+plotmafSummary(maf = high,
+               rmOutlier = TRUE,
+               addStat = "median",
+               dashboard = TRUE,
+               titvRaw = FALSE)
+
+low = read.csv("low.csv",sep = "," , header = T,
+                stringsAsFactors = FALSE ,
+                check.names = FALSE)
+low = read.maf(maf = low,
+                vc_nonSyn=names(tail(sort(table(low$Variant_Classification )))))
+##read.maf读取以制表符作为分隔的maf文件
+colnames(low) =c("Tumor_Sample_Barcode", "Hugo_Symbol", 
+                  "Chromosome", "Start_Position", 
+                  "End_Position", "Reference_Allele", "Tumor_Seq_Allele2", 
+                  "HGVSp_Short" , 'effect' ,"Consequence",
+                  "vaf" )
+##将原矩阵的  列名  更换  为上述。
+low$Entrez_Gene_Id =1
+low$Center ='ucsc'
+low$NCBI_Build ='GRCh38'
+low$NCBI_Build ='GRCh38'
+low$Strand ='+'
+low$Variant_Classification = low$effect
+##在数据结构中添加上述部分
+tail(sort(table(low$Variant_Classification )))
+##table()为 总结 表格中  各变量出现次数。
+##sort为升序或降序排列变量
+##tail  返回向量矩阵的最后部分
+
+low$Tumor_Seq_Allele1 = low$Reference_Allele
+low$Variant_Type = ifelse(
+  low$Reference_Allele %in% c('A','C','T','G') & low$Tumor_Seq_Allele2 %in% c('A','C','T','G'),
+  'SNP','INDEL'
+)
+##ifelse(cond,statment1,statment2) 如果cond成立，执行statment1，否则执行statment2，可以对数据做递归循环。
+##{
+####%in%相当于match()函数的一个缩写。用来判断一个数组或矩阵是否包含在另一个数组或矩阵里。举个例子一目了然：
+####首先复制两个变量a和b
+####  a <- 1:5
+####  b <- 3:7
+####  a %in% b    #看a的元素是否包含在b中     输出结果如下：
+####  [1] FALSE FALSE  TRUE  TRUE  TRUE
+##}
+table(low$Variant_Type )
+low = read.maf(maf = low,
+                vc_nonSyn=names(tail(sort(table(low$Variant_Classification )))))
+##read.maf读取以制表符作为分隔的maf文件
+##read.maf读取以制表符作为分隔的maf文件
+oncoplot(maf=low,top=10,fontSize=1,showTumorSampleBarcodes=F) 
+
+##瀑布图(Oncoplots)：
+oncoplot(maf = low,
+         #draw_titv = FALSE,
+         #anno_height = 1,#样本注释区高度
+         #legend_height = 4, #图例绘图区高度
+         #drawRowBar = T, #是否显示右侧条形图
+         #drawColBar = T, #是否显示顶部条形图
+         top = 10) #高频突变的Top10基因
+
+#更改配色：
+vc_cols <- RColorBrewer::brewer.pal(n = 8, name = 'Paired')
+names(vc_cols) <- c(
+  'In_Frame_Ins',
+  'Translation_Start_Site',
+  'Nonstop_Mutation',
+  'Frame_Shift_Ins',
+  'Frame_Shift_Del',
+  'Splice_Site',
+  'In_Frame_Del',
+  'Missense_Mutation'
+)
+oncoplot(maf = low, colors = vc_cols, top = 10)
+
+##maf文件摘要图：
+plotmafSummary(maf = low,
+               rmOutlier = TRUE,
+               addStat = "median",
+               dashboard = TRUE,
+               titvRaw = FALSE)
+tmb(maf,logScale = T)
+
+mafCompare()
+
+# 使用mafCompare比较差异突变基因
+fvsm <- mafCompare(m1=high, m2=low, m1Name="high", m2Name="low", minMut=10)
+result <- fvsm$results
+
+forestPlot(mafCompareRes=fvsm, pVal=0.05, color=c("maroon", "royalblue"), geneFontSize=0.8)
+
+# 结果保存到文件"female_vs_male.tsv"
+write.table(fvsm$results, file="female_vs_male.tsv", quote=FALSE, row.names=FALSE, sep="\t")

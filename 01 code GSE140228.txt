@@ -1,0 +1,356 @@
+library(dplyr)
+library(Seurat)
+library(patchwork)
+setwd("C://Users//log//Desktop//LIHC_scRNAseq//GSE140228")
+###步骤1：初始化
+memory.limit(size=32*1024*1024*1024)
+memory.size(36*1024*1024*1024)
+ls()
+sc.data<-Read10X_h5("LIHC_GSE140228_Smartseq2_expression.h5")
+data <- CreateSeuratObject(counts = sc.data, project = "pbmc3k", min.cells = 3, min.features = 200) 
+#data <- CreateSeuratObject(counts = data.data, project = "data3k", min.cells = 3, min.features = 200,meta.data = metadata)  #如读取了metadata运行这个代码，不需要运行上一个代码
+
+###步骤2：质控
+###线粒体基因比例
+data[["percent.mt"]] <- PercentageFeatureSet(data, pattern = "^MT-") 
+#head(data@meta.data, 5)
+###质控可视化
+VlnPlot(data, features = c("nFeature_RNA", "nCount_RNA","percent.mt"), ncol = 3)
+##图1：nFeature_RNA表达数，nCount_RNA细胞数
+plot1 <- FeatureScatter(data, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(data, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+##图2：nFeature_RNA表达数，nCount_RNA细胞数，percent.mt线粒体比例三者间的关系
+
+###根据图1和图2 去除表达小于200或大于7500或>20%线粒体基因
+data <- subset(data, subset = nFeature_RNA > 200 & percent.mt < 20)
+
+###写出matrix_filtrate
+#write.table(data@assays$RNA@counts,file="BRCA GSE161529 filtrate qupici.txt",quote=F,sep="\t")
+
+###步骤3：标准化
+data <- NormalizeData(data, normalization.method = "LogNormalize", scale.factor = 10000)
+#data[["RNA"]]@data
+
+###步骤4：寻找细胞间的高异质性基因
+data <- FindVariableFeatures(data, selection.method = "vst", nfeatures = 2000)  #top2000差异基因
+top10 <- head(VariableFeatures(data), 10)   #top10差异基因
+plot1 <- VariableFeaturePlot(data)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+##图3：展示top2000差异基因中Top10高异质性基因
+
+###步骤5：Scaling the data
+all.genes <- rownames(data)
+data <- ScaleData(data, features = all.genes)
+
+###步骤6：PCA 分析
+data <- RunPCA(data, features = VariableFeatures(object = data))
+##表1：PCA中各PC所包含的基因
+
+#print(data[["pca"]], dims = 1:5, nfeatures = 5) #只显示各PC中前5个基因
+
+VizDimLoadings(data, dims = 1:12, reduction = "pca")
+##图4：展示12个PC中特异性基因
+
+DimPlot(data, reduction = "pca")
+##图5：PCA结果展示
+
+DimHeatmap(data, dims = 1:1, cells = 500, balanced = TRUE)
+##图6：PCA中PC1所包含的基因
+
+DimHeatmap(data, dims = 1:12, cells = 500, balanced = TRUE)
+##图7：PCA中各PC所包含的基因
+
+###步骤7：确定数据维度
+#方法1 耗时4min
+data <- JackStraw(data, num.replicate = 100)
+data <- ScoreJackStraw(data, dims = 1:20)
+JackStrawPlot(data, dims = 1:20)
+##图8：绘制PC曲线及p值，确定数据维度
+
+#方法2
+ElbowPlot(data)
+##图9：根据拐点确定数据维度
+
+###步骤8：根据上一步中的合适维度对细胞进行分群
+data <- FindNeighbors(data, dims = 1:8)
+data <- FindClusters(data, resolution = 1)#resolution可以设0.1-1之间，值越高，亚群数目越多，常规0.5
+#head(Idents(data), 4) #查看前4类
+
+###步骤9：非线性分类(UMAP/tSNE)
+
+#使用umap进行分群
+data <- RunTSNE(data, dims = 1:8)
+DimPlot(data, reduction = "tsne", label = TRUE) 
+
+##图10：umap分群图
+#saveRDS(data, file = "C:/Users/log/Desktop/table2 umap.rds")
+##表2：umap分群结果保存
+#readRDS(data, file = "E:/Desktop/GSCT/GBM/table2 umap.rds")
+##读取上一步保存的umap分群结果
+
+###写出umap cluster结果
+#write.table(data@meta.data,file="GSE114727 umap.txt",quote=F,sep="\t")
+
+# #使用tsne进行分群
+#data <- RunTSNE(data, dims = 1:9)
+#DimPlot(data, reduction = "tsne", label = TRUE)
+##图11：tsne分群图
+#saveRDS(data, file = "C:/Users/log/Desktop/table3 tsne.rds")
+##表3：tsne分群结果保存
+
+###步骤10：差异基因
+#cluster1.markers <- FindMarkers(data, ident.1 = 1, min.pct = 0.25) #查看cluster1的差异markers
+#head(cluster1.markers, n = 5)
+#cluster5.markers <- FindMarkers(data, ident.1 = 5, ident.2 = c(0, 3), min.pct = 0.25)#查看cluster5与cluster0与3的差异markers
+#head(cluster5.markers, n = 5)
+#每个cluster与其他各cluster和所有clusters的差异，
+#min.pct：在两组细胞中的任何一组中检测到的最小百分
+#thresh.test：在两组细胞间以一定数量的差异表达（平均）
+#max.cells.per.ident：通过降低每个类的采样值，提高计算速度
+data.markers <- FindAllMarkers(data, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+data.markers %>% group_by(cluster) %>% top_n(n = 2, wt = avg_log2FC)
+#cluster1.markers <- FindMarkers(data, ident.1 = 0, logfc.threshold = 0.25, test.use = "roc", only.pos = TRUE)
+write.table(data.markers,file="table 4 after cluster markers.txt",quote=F,sep="\t")
+##表4：分群特征性基因"
+VlnPlot(data, features = c("CD2","CD3E","CD3D","CD3G",  ##T cells
+                           "CD4",  ##CD4T
+                           "CD8A","CD8B",  ##CD8T
+                           "PDCD1","LAG3", ##CD8Tex
+                           "MKI67", ##Tproli
+                           "KLRD1", ##NK
+                           "CD79A", "SLAMF7", "BLNK", "FCRL5","IGKC",  ##B and Plasma cells
+                           "PECAM1","VWF","ENG","CDH5",  ##TECs
+                           "COL1A2","FAP","DCN","COL3A1","COL6A1",  ##CAFs
+                           "CD14","CD163","CD68","CSF1R",  ##Mono/Macro
+                           "FCGR3A","LAMP3","CD86","CD1C",  ##DC cells
+                           "CPA3" )) ##Mast
+
+VlnPlot(data, features = c("EPCAM",
+                           "EGFR", "CDH1", "KRT14", 
+                           "KRT5","TP63","KRT17","MME", "KRT8", "KRT18","KRT19",
+                           "GATA3","MUC1","CD24","KIT","GABRP"))
+##图12_1：epithelial标志基因表达情况
+VlnPlot(data, features = c( "ITGA6","FAP", "COL1A1", "COL3A1", "COL5A1", "ACTA2","TAGLN","LUM",
+                            "FBLN1","COL6A3", "COL1A2", "COL6A1","COL6A2"))
+##图12_2：stromal标志基因表达情况
+VlnPlot(data, features = c("PECAM1", "VWF", "CDH5","SPARC","COL4A1",
+                           "CD34","COL4A2","CD36","RGS5","MCAM","PDGFRA"))
+##图12_3：fibroblast,endothelial标志基因表达情况
+VlnPlot(data, features = c("PTPRC", "CD2", "CD3D", "CD3E", "CD3G","CD8A","CD8B",
+                           "MS4A1","CD79A", "CD79B", "BLNK","CD14","CD68","CD163","CSF1R"))
+##图12_4：immune标志基因表达情况
+VlnPlot(data, features = c("CD19","IGLC7", "RPS29","EEF1A1"))
+##图12：展示某些基因在各组中的表达情况
+
+VlnPlot(data, features = c("NCAM1"), slot = "counts", log = TRUE)
+##图13：展示某些基因在各组中的表达情况（原始counts）
+
+FeaturePlot(data, features = c("NCAM1","NCR1","NKG7","HAVCR2",  ##NK-cells
+                               "GNLY", "PFN1", "GZMA", "GZMB","GMZM","GZMH",  ##Cytotoxic T, NK
+                               "FOXP3","CTLA4","TIGIT","TNFRSF4","LAG3","PDCD1",  ##Exhausted T cell, T-regulatory Cell
+                               "CD8A","CD8B","CD4",  ##T cells
+                               "CD79A","CD19",  ##B cells
+                               "FCGR3A","CD68","ANPEP","ITGAX","CD14","ITGAM","CD33"), min.cutoff = "q10", max.cutoff = "q99")
+##图14：展示某些基因在各组中的表达及分别情况，设置最低与最高显示值（也可用具体表达值，min.cutoff = 1, max.cutoff = 3）
+#细胞周期 "MCM6","TOP2A","MKI67","PCNA"
+#免疫标志物 "CD3E", "CD4", "CD8A", "IL7R","PARP1","CD28"
+
+top10 <- data.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+DoHeatmap(data, features = top10$gene) + NoLegend()
+##图15：展示在各组中的特异性基因
+
+RidgePlot(data, features =  c("NCAM1","NCR1","NKG7","HAVCR2",  ##NK-cells
+                              "GNLY", "PFN1", "GZMA", "GZMB","GMZM","GZMH",  ##Cytotoxic T, NK
+                              "FOXP3","CTLA4","TIGIT","TNFRSF4","LAG3","PDCD1",  ##Exhausted T cell, T-regulatory Cell
+                              "CD8A","CD8B","CD4",  ##T cells
+                              "CD79A","CD19",  ##B cells
+                              "FCGR3A","CD68","ANPEP","ITGAX","CD14","ITGAM","CD33"), ncol = 1)
+##图16：特异性基因在各组中的表达
+
+library(ggplot2)
+list_genes=list(T=c("CD2", "CD3E", "CD3D", "CD3G"),
+                CD4T="CD4",
+                CD8Tex=c("CD8A", "CD8B", "PDCD1", "LAG3"),
+                NK="KLRD1",
+                B_or_plasma=c("CD79A", "SLAMF7", "BLNK", "FCRL5", "IGKC"),
+                Mono_or_Macro=c("CD14", "CD163", "CD68", "CSF1R"),
+                DC=c("FCGR3A", "LAMP3", "CD86", "CD1C"),
+                Mast=c("CPA3"))
+
+
+p1=DotPlot(data,
+           features=list_genes,
+           cols = c("grey", "red"),
+           cluster.idents = T)+
+  RotatedAxis()+
+  theme(
+    # 面板
+    panel.border = element_rect(color="black"), #面板边框
+    panel.spacing = unit(3, "mm"), #面板间距
+    
+    # 分面标题
+    #strip.background = element_rect(color="red"),
+    strip.text = element_text(size=10,angle = 45,margin=margin(b=3, unit="mm")),
+    strip.placement = 'outlet', #
+    
+    # 坐标轴线
+    axis.line = element_blank(),
+  )+labs(x="", y="")
+p1
+
+
+DotPlot(data, features =  c("MKI67")) + RotatedAxis()
+##图17：特异性基因在各组中的表达
+
+
+###步骤11：对分群进行标注
+new.cluster.ids <- c("CD8Tex cell","NK cell","CD4Tconv cell", "B cell",
+                     "Monocyte/Macrophage","NK cell","CD4Tconv cell","DC cell",
+                     "Monocyte/Macrophage","NK cell","Plasma cell","Monocyte/Macrophage",
+                     "Monocyte/Macrophage","B cell","CD4Tconv cell", "Monocyte/Macrophage",
+                     "NK cell","Monocyte/Macrophage","Monocyte/Macrophage","Mast cell",
+                     "Monocyte/Macrophage")
+data@meta.data$RNA_snn_res.1 <- data@active.ident
+data@meta.data$celltype = NULL
+data@meta.data$celltype <- data@meta.data$RNA_snn_res.1
+
+names(new.cluster.ids) <- levels(data)
+data <- RenameIdents(data, new.cluster.ids)
+DimPlot(data, reduction = "tsne", label = TRUE, pt.size = 1) + NoLegend()
+##图18：Cluster增加标注
+saveRDS(data, file = "C:/Users/log/Desktop/Fig5 Cluster Annotion")
+##表5：存储上述结果
+
+###步骤12：系统发育分析（Phylogenetic Analysis of Identity Classes）
+data<-BuildClusterTree(data)
+Tool(object = data, slot = 'BuildClusterTree')
+PlotClusterTree(data)
+##图19：Cluster Tree View
+
+###步骤13：细胞周期分析
+data <- CellCycleScoring(object = data,g2m.features = cc.genes$g2m.genes,s.features = cc.genes$s.genes)
+VlnPlot(data, features = c("nFeature_RNA", "nCount_RNA", "percent.mt","percent.HB","G2M.Score","S.Score"), ncol = 6)#+scale_color_npg()
+##图20：各组细胞周期
+
+
+###步骤14：提取某一cluster  并进行PCA分析
+data  #查看总的细胞数
+table(data@active.ident) #查看每个分组的细胞数
+subdata<-subset(x = data,idents=c("M","T"))  #提取的Cluster名
+subdata
+###返回步骤6：subdata的PCA分析
+
+
+##基因集评分
+
+CD8_Tex_marker <- openxlsx::read.xlsx("CD8_Tex_marker.xlsx")
+a <- CD8_Tex_marker[CD8_Tex_marker$GENE %in% rownames(sce),]
+a <- a[,-1]
+sce <- data
+#PercentageFeatureSet
+sce <- PercentageFeatureSet(sce,features = a,col.name = 'GSE140228_PercentageFeatureSet_CD8Tex')
+my_comparisons <- list(c('CD8Tex cell',"CD4Tconv cell"))
+library(ggpubr)
+my9color <- c('#5470c6','#91cc75','#fac858','#ee6666','#73c0de','#3ba272','#fc8452','#9a60b4','#ea7ccc')
+ggviolin(sce@meta.data, x = "celltype", y = "GSE140228_PercentageFeatureSet_CD8Tex",
+                         color = "celltype",add = 'mean_sd',fill = 'celltype',
+                         add.params = list(color = "black")) + 
+  stat_compare_means(comparisons = my_comparisons,label = "p.signif") + 
+  scale_color_manual(values = my9color) + 
+  scale_fill_manual(values = my9color) +
+  theme(axis.text.x.bottom = element_text(angle = 90,vjust = 0.5,hjust = 1)) + 
+  NoLegend() + labs(x = '')
+FeaturePlot(sce,'GSE140228_PercentageFeatureSet_CD8Tex',cols = c("#F0F921FF", "#7301A8FF"))
+#AddModuleScore
+sce <- AddModuleScore(sce,features = a,col.name = 'GSE140228_AddModuleScore_CD8Tex')
+ggviolin(sce@meta.data, x = "celltype", y = "GSE140228_AddModuleScore_CD8Tex1",
+         color = "celltype",add = 'mean_sd',fill = 'celltype',
+         add.params = list(color = "black")) + 
+  stat_compare_means(comparisons = my_comparisons,label = "p.signif") + 
+  scale_color_manual(values = my9color) + 
+  scale_fill_manual(values = my9color) +
+  theme(axis.text.x.bottom = element_text(angle = 90,vjust = 0.5,hjust = 1)) + 
+  NoLegend() + labs(x = '')
+FeaturePlot(sce,'GSE140228_AddModuleScore_CD8Tex',cols = c("#F0F921FF", "#7301A8FF"))
+#AUCell 
+library(AUCell)
+library(clusterProfiler)
+library(ggplot2)
+library(Seurat)
+library(GSEABase)
+cells_rankings <- AUCell_buildRankings(sce@assays$RNA@counts,nCores=4, plotStats=TRUE)
+extraGeneSets <- c(GeneSet(sample(a),setName="GSE140228_AUCell_CD8Tex"))
+geneSets1 <- GeneSetCollection(extraGeneSets)
+cells_AUC <- AUCell_calcAUC(geneSets1, cells_rankings)
+cells_AUC
+AUCell_exploreThresholds(cells_AUC, plotHist=TRUE, assign=TRUE) 
+geneSet <- a
+getAUC <- getAUC(cells_AUC)
+aucs <- as.numeric(getAUC(cells_AUC)[1,])
+sce$GSE140288_AUCell_CD8Tex <- aucs
+df<- data.frame(sce@meta.data, sce@reductions[["tsne"]]@cell.embeddings)
+colnames(df)
+#我们看到每个细胞现在都加上AUC值了，下面做一下可视化。
+class_avg <- df %>%
+  group_by(celltype) %>%
+  summarise(
+    tSNE_1 = median(tSNE_1),
+    tSNE_2 = median(tSNE_2)
+    )
+ggplot(df, aes(tSNE_1, tSNE_2))  +
+  geom_point(aes(colour  = GSE140288_AUCell_CD8Tex)) + viridis::scale_color_viridis(option="H") +
+  ggrepel::geom_text_repel(aes(label = celltype),
+                           data = class_avg,
+                           size = 6,
+                           segment.color = NA) +   
+  theme(legend.position = "none") + theme_classic() 
+ggviolin(df, x = "celltype", y = "GSE140288_AUCell_CD8Tex",
+         color = "celltype",add = 'mean_sd',fill = 'celltype',
+         add.params = list(color = "black")) + 
+  stat_compare_means(comparisons = my_comparisons,label = "p.signif") + 
+  scale_color_manual(values = my9color) + 
+  scale_fill_manual(values = my9color) +
+  theme(axis.text.x.bottom = element_text(angle = 90,vjust = 0.5,hjust = 1)) + 
+  NoLegend() + labs(x = '')
+saveRDS(data,"data.rds")
+#ssGSEA
+gene.expr <-  as.matrix(sce[["RNA"]]@data)
+dim(gene.expr)
+ssGSEA <- as.data.frame(a)
+colnames(ssGSEA)<-'GSE140228_ssGSEA_CD8Tex'
+ssGSEA.result <- GSVA::gsva(gene.expr, ssGSEA,method='ssgsea',kcdf='Gaussian')
+data4plot <-cbind(sce@meta.data,t(ssGSEA.result)[rownames(sce@meta.data),])
+colnames(data4plot)[ncol(data4plot)] <- 'GSE140288_ssGSEA_CD8Tex'
+ggviolin(data4plot, x = "celltype", y = "GSE140288_ssGSEA_CD8Tex",
+                     color = "celltype",add = 'mean_sd',fill = 'celltype',
+                     add.params = list(color = "black")) + 
+  stat_compare_means(comparisons = my_comparisons,label = "p.signif") + 
+  scale_color_manual(values = my9color) + 
+  scale_fill_manual(values = my9color) +
+  theme(axis.text.x.bottom = element_text(angle = 90,vjust = 0.5,hjust = 1)) + 
+  NoLegend() + labs(x = '')
+sce@meta.data$GSE140288_ssGSEA_CD8Tex = NULL
+sce@meta.data$GSE140288_ssGSEA_CD8Tex <- data4plot$GSE140288_ssGSEA_CD8Tex
+FeaturePlot(sce,'GSE140288_ssGSEA_CD8Tex',cols = c("#F0F921FF", "#7301A8FF"))
+#GSVA
+gene.expr <-  as.matrix(sce[["RNA"]]@data)
+dim(gene.expr)
+GSVA <- as.data.frame(a)
+colnames(GSVA)<-'GSE140228_ssGSEA_CD8Tex'
+GSVA.result <- GSVA::gsva(gene.expr, GSVA,method='gsva',kcdf='Gaussian')
+data4plot <-cbind(sce@meta.data,t(GSVA.result)[rownames(sce@meta.data),])
+colnames(data4plot)[ncol(data4plot)] <- 'GSE140288_GSVA_CD8Tex'
+ggviolin(data4plot, 
+                   x = "celltype", y = "GSE140288_GSVA_CD8Tex",
+                   color = "celltype",add = 'mean_sd',fill = 'celltype',
+                   add.params = list(color = "black")) + 
+  stat_compare_means(comparisons = my_comparisons,label = "p.signif") + 
+  scale_color_manual(values = my9color) + 
+  scale_fill_manual(values = my9color) +
+  theme(axis.text.x.bottom = element_text(angle = 90,vjust = 0.5,hjust = 1)) + 
+  NoLegend() + labs(x = '')
+sce@meta.data$GSE140288_GSVA_CD8Tex = NULL
+sce@meta.data$GSE140288_GSVA_CD8Tex <- data4plot$GSE140288_GSVA_CD8Tex
+FeaturePlot(sce,'GSE140288_GSVA_CD8Tex',cols = c("#F0F921FF", "#7301A8FF"))

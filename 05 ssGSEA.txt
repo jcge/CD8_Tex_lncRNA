@@ -1,0 +1,32 @@
+library(GSVA)
+data=read.delim(file.choose(),row.names = 1,header = T)###表达谱数据第一行为ID，第一列为gene symbol
+genelist=read.delim(file.choose(),row.names = 1,header=F)###导入genelist文件，第一列为genelist名，右侧为该功能相关的所有gene名"
+genelist<-as.matrix(genelist) 
+nrow=nrow(genelist)
+data=data.matrix(data)
+genelist[genelist==""]=NA  ##genelist文件空值定义为NA
+genesets=c()
+
+for (i in 1:nrow){
+  a=genelist[i,]
+  a=a[!is.na(a)]  ###去除所取行中
+  a=list(as.character(as.matrix(a)))  ###将行转为list格式
+  genesets=c(genesets,a)
+}
+
+overlap_num<-c()
+for(i in 1:nrow(genelist)){
+  b<-as.character(unlist(genelist[i,]))
+  o<-intersect(rownames(data),b)"
+  overlap_num<-c(overlap_num,length(o))
+}
+
+index<-overlap_num>0
+d=rownames(genelist)[index]
+
+ssgsea_score = gsva(data, genelist, method = "ssgsea", kcdf=”Gaussian”, ssgsea.norm = TRUE, verbose = TRUE) 
+result=data.matrix(ssgsea_score)
+rownames(result)=d
+colnames(result)=colnames(data)
+
+write.table(result,file="GSVA_result.txt",quote=F,sep="\t")

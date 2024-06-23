@@ -1,0 +1,89 @@
+##聚类分析
+
+#清空环境变量
+rm(list=ls())   
+options(stringsAsFactors = F)
+
+options(download.file.method = 'libcurl')
+options(url.method='libcurl')
+setwd("C:\\Users\\log\\Desktop\\肝癌生信\\06基于CD8Tex相关lncRNA的聚类分析")
+BiocManager::install("ALL",ask = F,update = F)
+data<-read.table("TCGA_LIHC_CD8TexlncRNA_tumor.txt",header=T)
+
+######################68means算法######################==
+
+#1. R包及数据集准备
+##1.1 R包读取
+if(!require(cluster))install.packages("cluster")
+if(!require(ggplot2))install.packages("ggplot2")
+library(cluster)
+library(ggplot2)
+
+##1.2 iris数据集准备
+data("iris")
+rt <- iris[,1:4]
+str(rt)
+
+iris_scale <- scale(data)
+iris_scale[1:4,]
+
+#2. 最佳k值的选取
+tot_withinss <- vector()
+betweenss <- vector()
+for(ii in 1:15){
+  k1 <- kmeans(iris_scale,ii)
+  tot_withinss[ii] <- k1$tot.withinss
+  betweenss[ii] <- k1$betweenss
+}
+
+kmeanvalue <- data.frame(kk = 1:15,
+                         tot_withinss = tot_withinss,
+                         betweenss = betweenss)
+kmeanvalue[1:4,]
+
+ggplot(kmeanvalue, aes(x = kk,y = tot_withinss))+
+  geom_point() + 
+  geom_line() +
+  labs(y = "value") +
+  theme_bw()+
+  ggtitle("Total within-cluster sum of squares")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_x_continuous("Cluster number of kmeans",kmeanvalue$kk)
+
+ggplot(kmeanvalue, aes(x = kk,y = betweenss))+
+  geom_point() +
+  geom_line() +
+  labs(y = "value") +
+  theme_bw()+
+  ggtitle("The between-cluster sum of squares") +
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_x_continuous("Cluster number of kmeans", kmeanvalue$kk)
+
+#3. kmeans算法
+set.seed(245)
+k3 <- kmeans(iris_scale, 3)
+k3
+
+##查看聚类数
+table(k3$cluster)
+
+#4. 聚类结果可视化展示
+##4.1 可视化展示一
+library(FactoMineR)
+library(factoextra)
+ddb.pca <- PCA(iris_scale, graph = FALSE)
+group_list <- factor(k3$cluster,
+                     levels = c("1", "2", "3"))
+fviz_pca_ind(ddb.pca,
+             geom.ind = "point",
+             col.ind = group_list,
+             addEllipses = TRUE,
+             legend.title = "Groups"
+)
+
+##4.2 可视化展示二
+sis1 <- silhouette(k3$cluster,
+                   dist(iris_scale, method = "euclidean"))
+plot(sis1,
+     main = "Iris kmean silhouette",
+     col = c("red", "green", "blue"))
